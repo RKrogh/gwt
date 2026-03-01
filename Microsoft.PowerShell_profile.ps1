@@ -18,7 +18,11 @@ function gwt {
                 git worktree add -b $branch $folder "origin/$branch"
             } else {
                 # Brand new branch off main
-                git worktree add -b $branch $folder main
+                $defaultBranch = git symbolic-ref refs/remotes/origin/HEAD 2>$null | ForEach-Object { $_ -replace 'refs/remotes/origin/', '' }
+                if (-not $defaultBranch) {
+                    $defaultBranch = if (git rev-parse --verify "origin/main" 2>$null) { "main" } else { "master" }
+                }
+                git worktree add -b $branch $folder $defaultBranch
             }
 
             if ($LASTEXITCODE -ne 0) {
@@ -27,8 +31,9 @@ function gwt {
             }
 
             Push-Location $folder
-            npx husky install
-            '{}' | Out-File -FilePath "local.settings.json" -Encoding utf8
+            # Prep new branch with missing .gitignored files here
+            # npx husky install
+            # '{}' | Out-File -FilePath "local.settings.json" -Encoding utf8
             Write-Host "Worktree ready at $folder" -ForegroundColor Green
             code .
 
