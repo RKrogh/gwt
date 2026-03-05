@@ -35,54 +35,39 @@ A lightweight CLI tool for managing git worktrees. Built for developers who work
 
 ## Installation
 
-### Windows (PowerShell)
+### Quick Install
 
-1. Open PowerShell and run:
+**Windows (PowerShell):**
 
-   ```powershell
-   code $PROFILE
-   ```
+```powershell
+if (!(Test-Path $PROFILE)) { New-Item -Path $PROFILE -ItemType File -Force | Out-Null }; if (!(Select-String -Path $PROFILE -Pattern "function gwt" -Quiet)) { (Invoke-WebRequest -Uri "https://raw.githubusercontent.com/RKrogh/gwt/main/Microsoft.PowerShell_profile.ps1").Content >> $PROFILE; . $PROFILE; Write-Host "gwt installed" -ForegroundColor Green } else { Write-Host "gwt already installed" -ForegroundColor Yellow }
+```
 
-   If the file doesn't exist:
+**Linux / macOS (Bash):**
 
-   ```powershell
-   New-Item -Path $PROFILE -ItemType File -Force
-   code $PROFILE
-   ```
+```bash
+grep -q "function gwt" ~/.bashrc 2>/dev/null && echo "gwt already installed" || { curl -fsSL "https://raw.githubusercontent.com/RKrogh/gwt/main/gwt.sh" >> ~/.bashrc && source ~/.bashrc && echo "gwt installed"; }
+```
 
-2. Paste the contents of [`gwt.ps1`](gwt.ps1) into your profile.
+For Zsh, replace `~/.bashrc` with `~/.zshrc`.
 
-3. Save and reload:
+Verify the installation:
 
-   ```powershell
-   . $PROFILE
-   ```
+```
+gwt
+```
 
-4. Verify:
+### Manual Install
 
-   ```powershell
-   gwt
-   ```
+If you prefer to install manually:
 
-**Requirements:** Git, Windows Terminal (for the `open` command with WSL).
+1. Copy the contents of [`Microsoft.PowerShell_profile.ps1`](Microsoft.PowerShell_profile.ps1) (Windows) or [`gwt.sh`](gwt.sh) (Linux/macOS) into your shell profile.
+2. Reload your profile (`. $PROFILE` or `source ~/.bashrc`).
 
-### Linux / macOS (Bash)
+### Requirements
 
-1. Add the contents of [`gwt.sh`](gwt.sh) to your `~/.bashrc` or `~/.zshrc`.
-
-2. Reload:
-
-   ```bash
-   source ~/.bashrc
-   ```
-
-3. Verify:
-
-   ```bash
-   gwt
-   ```
-
-**Requirements:** Git.
+- Git
+- Windows Terminal (for the `open` command with WSL on Windows)
 
 ## Commands
 
