@@ -1,3 +1,32 @@
+function Get-Worktrees {
+    $porcelain = git worktree list --porcelain
+    $worktrees = @()
+    $current = @{}
+    foreach ($line in $porcelain) {
+        if ($line -match '^worktree (.+)$') {
+            if ($current.Count -gt 0) { $worktrees += [PSCustomObject]$current }
+            $current = @{ Path = $matches[1]; Branch = $null; Head = $null; Bare = $false }
+        } elseif ($line -match '^HEAD (\S+)') {
+            $current.Head = $matches[1]
+        } elseif ($line -match '^branch refs/heads/(.+)$') {
+            $current.Branch = $matches[1]
+        } elseif ($line -match '^detached') {
+            $current.Branch = 'detached'
+        } elseif ($line -match '^bare') {
+            $current.Bare = $true
+        }
+    }
+    if ($current.Count -gt 0) { $worktrees += [PSCustomObject]$current }
+    return $worktrees
+}
+
+function Format-Worktree {
+    param([PSCustomObject]$wt)
+    $short = if ($wt.Head) { $wt.Head.Substring(0, [Math]::Min(7, $wt.Head.Length)) } else { "0000000" }
+    $branch = if ($wt.Branch) { "[$($wt.Branch)]" } else { "(detached)" }
+    return "$($wt.Path)  $short $branch"
+}
+
 function gwt {
     param(
         [string]$command,
@@ -43,14 +72,14 @@ function gwt {
             Pop-Location
         }
         "open" {
-            $worktrees = @(git worktree list)
+            $worktrees = @(Get-Worktrees)
 
             if ($branch -match '^\d+$') {
                 $index = [int]$branch - 1
             } else {
                 Write-Host "`nWorktrees:" -ForegroundColor Cyan
                 for ($i = 0; $i -lt $worktrees.Count; $i++) {
-                    Write-Host "  $($i + 1)) $($worktrees[$i])"
+                    Write-Host "  $($i + 1)) $(Format-Worktree $worktrees[$i])"
                 }
                 $pick = Read-Host "`nSelect number to open (or 'q' to cancel)"
                 if ($pick -eq 'q') { return }
@@ -62,8 +91,7 @@ function gwt {
                 return
             }
 
-            $selected = $worktrees[$index]
-            $path = ($selected -split '\s+')[0]
+            $path = $worktrees[$index].Path
 
             Push-Location $path
             code .
@@ -74,7 +102,7 @@ function gwt {
             Write-Host "Opened worktree at $path" -ForegroundColor Green
         }
         "remove" {
-            $worktrees = @(git worktree list)
+            $worktrees = @(Get-Worktrees)
 
             if ($worktrees.Count -le 1) {
                 Write-Host "No worktrees to remove (only main exists)" -ForegroundColor Yellow
@@ -86,7 +114,7 @@ function gwt {
             } else {
                 Write-Host "`nWorktrees:" -ForegroundColor Cyan
                 for ($i = 0; $i -lt $worktrees.Count; $i++) {
-                    Write-Host "  $($i + 1)) $($worktrees[$i])"
+                    Write-Host "  $($i + 1)) $(Format-Worktree $worktrees[$i])"
                 }
                 $pick = Read-Host "`nSelect number to remove (or 'q' to cancel)"
                 if ($pick -eq 'q') { return }
@@ -100,13 +128,13 @@ function gwt {
 
             $selected = $worktrees[$index]
 
-            if ($selected -match '\[main\]') {
+            if ($selected.Branch -eq 'main' -or $selected.Branch -eq 'master') {
                 Write-Host "Cannot remove main worktree" -ForegroundColor Red
                 return
             }
 
-            $path = ($selected -split '\s+')[0]
-            $branchName = if ($selected -match '\[(.+)\]') { $matches[1] } else { $null }
+            $path = $selected.Path
+            $branchName = $selected.Branch
 
             Write-Host "Remove worktree?" -ForegroundColor Yellow
             Write-Host "  Path:   $path"
@@ -117,11 +145,11 @@ function gwt {
                 return
             }
 
-            git worktree remove $path
+            git worktree remove "$path"
             if ($LASTEXITCODE -ne 0) {
                 $force = Read-Host "Worktree has changes. Force remove? (y/n)"
                 if ($force -eq 'y') {
-                    git worktree remove --force $path
+                    git worktree remove --force "$path"
                     if (Test-Path $path) {
                         Write-Host "Close VS Code and any terminals on this worktree, then press Enter..." -ForegroundColor Yellow
                         Read-Host
@@ -147,12 +175,12 @@ function gwt {
             Write-Host "Removed worktree and branch" -ForegroundColor Green
         }
         "status" {
-            $worktrees = @(git worktree list)
+            $worktrees = @(Get-Worktrees)
             Write-Host "`nWorktree Status:" -ForegroundColor Cyan
             for ($i = 0; $i -lt $worktrees.Count; $i++) {
-                $path = ($worktrees[$i] -split '\s+')[0]
-                $branchInfo = if ($worktrees[$i] -match '\[(.+)\]') { $matches[1] } else { "detached" }
-                
+                $path = $worktrees[$i].Path
+                $branchInfo = if ($worktrees[$i].Branch) { $worktrees[$i].Branch } else { "detached" }
+
                 Push-Location $path
                 $dirty = git status --porcelain
                 $ahead = git rev-list --count '@{u}..HEAD' 2>$null
@@ -173,7 +201,7 @@ function gwt {
             }
         }
         "pull" {
-            $worktrees = @(git worktree list)
+            $worktrees = @(Get-Worktrees)
 
             if ($branch -match '^\d+$') {
                 $index = [int]$branch - 1
@@ -187,7 +215,7 @@ function gwt {
             } else {
                 Write-Host "`nWorktrees:" -ForegroundColor Cyan
                 for ($i = 0; $i -lt $worktrees.Count; $i++) {
-                    Write-Host "  $($i + 1)) $($worktrees[$i])"
+                    Write-Host "  $($i + 1)) $(Format-Worktree $worktrees[$i])"
                 }
                 $pick = Read-Host "`nSelect number to pull, or 'all' (or 'q' to cancel)"
                 if ($pick -eq 'q') { return }
@@ -204,8 +232,8 @@ function gwt {
             }
 
             foreach ($wt in $selected) {
-                $path = ($wt -split '\s+')[0]
-                $branchInfo = if ($wt -match '\[(.+)\]') { $matches[1] } else { "unknown" }
+                $path = $wt.Path
+                $branchInfo = if ($wt.Branch) { $wt.Branch } else { "unknown" }
                 Write-Host "Pulling $branchInfo..." -ForegroundColor Cyan
                 Push-Location $path
                 git pull
@@ -214,14 +242,14 @@ function gwt {
             Write-Host "Done" -ForegroundColor Green
         }
         "cd" {
-            $worktrees = @(git worktree list)
+            $worktrees = @(Get-Worktrees)
 
             if ($branch -match '^\d+$') {
                 $index = [int]$branch - 1
             } else {
                 Write-Host "`nWorktrees:" -ForegroundColor Cyan
                 for ($i = 0; $i -lt $worktrees.Count; $i++) {
-                    Write-Host "  $($i + 1)) $($worktrees[$i])"
+                    Write-Host "  $($i + 1)) $(Format-Worktree $worktrees[$i])"
                 }
                 $pick = Read-Host "`nSelect number (or 'q' to cancel)"
                 if ($pick -eq 'q') { return }
@@ -233,7 +261,7 @@ function gwt {
                 return
             }
 
-            $path = ($worktrees[$index] -split '\s+')[0]
+            $path = $worktrees[$index].Path
             Set-Location $path
         }
         "prune" {
@@ -241,9 +269,9 @@ function gwt {
             Write-Host "Pruned stale worktrees" -ForegroundColor Green
         }
         "list" {
-            $worktrees = @(git worktree list)
+            $worktrees = @(Get-Worktrees)
             for ($i = 0; $i -lt $worktrees.Count; $i++) {
-                Write-Host "  $($i + 1)) $($worktrees[$i])"
+                Write-Host "  $($i + 1)) $(Format-Worktree $worktrees[$i])"
             }
         }
         default {
