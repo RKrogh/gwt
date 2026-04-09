@@ -43,13 +43,17 @@ A lightweight CLI tool for managing git worktrees. Built for developers who work
 if (!(Test-Path $PROFILE)) { New-Item -Path $PROFILE -ItemType File -Force | Out-Null }; if (!(Select-String -Path $PROFILE -Pattern "function gwt" -Quiet)) { (Invoke-WebRequest -Uri "https://raw.githubusercontent.com/RKrogh/gwt/main/Microsoft.PowerShell_profile.ps1").Content >> $PROFILE; . $PROFILE; Write-Host "gwt installed" -ForegroundColor Green } else { Write-Host "gwt already installed" -ForegroundColor Yellow }
 ```
 
-**Linux / macOS (Bash):**
+**Linux / macOS (Bash/Zsh):**
 
 ```bash
-grep -q "function gwt" ~/.bashrc 2>/dev/null && echo "gwt already installed" || { curl -fsSL "https://raw.githubusercontent.com/RKrogh/gwt/main/gwt.sh" >> ~/.bashrc && source ~/.bashrc && echo "gwt installed"; }
+curl -fsSL https://raw.githubusercontent.com/RKrogh/gwt/main/install.sh | bash
 ```
 
-For Zsh, replace `~/.bashrc` with `~/.zshrc`.
+This installs `gwt.sh` to `~/.local/share/gwt/` and adds a source line to your `.bashrc` (or `.zshrc`). Re-run with `--update` to pull the latest version:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/RKrogh/gwt/main/install.sh | bash -s -- --update
+```
 
 Verify the installation:
 
