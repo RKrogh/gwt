@@ -27,16 +27,17 @@ GWT_OPEN_EDITOR() {
 #   kitty:               kitty --directory "$1" bash -ic "claude; exec bash"
 #   tmux:                tmux new-window -c "$1" "claude; exec bash"
 GWT_OPEN_AGENT() {
+    local dir="$1" name="$2"
     if [[ "$OSTYPE" == "darwin"* ]]; then
-        osascript -e "tell app \"Terminal\" to do script \"cd '$1' && claude\""
+        osascript -e "tell app \"Terminal\" to do script \"cd '$dir' && claude --name '$name'\""
     elif command -v gnome-terminal &>/dev/null; then
-        gnome-terminal --working-directory="$1" -- bash -ic "claude; exec bash"
+        gnome-terminal --title="$name" --working-directory="$dir" -- bash -ic "claude --name '$name'; exec bash"
     elif command -v kitty &>/dev/null; then
-        kitty --directory "$1" bash -ic "claude; exec bash" &
+        kitty --title "$name" --directory "$dir" bash -ic "claude --name '$name'; exec bash" &
     elif command -v tmux &>/dev/null && [ -n "$TMUX" ]; then
-        tmux new-window -c "$1" "claude; exec bash"
+        tmux new-window -n "$name" -c "$dir" "claude --name '$name'; exec bash"
     else
-        echo "Start your agent manually: cd $1 && claude"
+        echo "Start your agent manually: cd $dir && claude --name '$name'"
     fi
 }
 
@@ -61,7 +62,18 @@ gwt() {
             elif git rev-parse --verify "origin/$branch" &>/dev/null; then
                 git worktree add -b "$branch" "$folder" "origin/$branch"
             else
-                git worktree add -b "$branch" "$folder" main
+                local base
+                base=$(git symbolic-ref refs/remotes/origin/HEAD 2>/dev/null | sed 's|refs/remotes/origin/||')
+                if [ -z "$base" ]; then
+                    if git rev-parse --verify "origin/main" &>/dev/null; then
+                        base="main"
+                    elif git rev-parse --verify "origin/master" &>/dev/null; then
+                        base="master"
+                    else
+                        base=$(git rev-parse --abbrev-ref HEAD)
+                    fi
+                fi
+                git worktree add -b "$branch" "$folder" "$base"
             fi
 
             if [ $? -ne 0 ]; then
@@ -79,7 +91,7 @@ gwt() {
 
             echo -e "\033[32mWorktree ready at $folder\033[0m"
             GWT_OPEN_EDITOR "$fullpath"
-            GWT_OPEN_AGENT "$fullpath"
+            GWT_OPEN_AGENT "$fullpath" "$branch"
             ;;
 
         open)
@@ -103,11 +115,12 @@ gwt() {
                 return
             fi
 
-            local path
+            local path branchName
             path=$(echo "${worktrees[$index]}" | awk '{print $1}')
+            branchName=$(echo "${worktrees[$index]}" | grep -oP '\[(.+?)\]' | tr -d '[]')
 
             GWT_OPEN_EDITOR "$path"
-            GWT_OPEN_AGENT "$path"
+            GWT_OPEN_AGENT "$path" "$branchName"
 
             echo -e "\033[32mOpened worktree at $path\033[0m"
             ;;
@@ -155,10 +168,21 @@ gwt() {
             read -rp "Continue? (y/n): " confirm
             [ "$confirm" != "y" ] && { echo -e "\033[33mCancelled\033[0m"; return; }
 
-            if ! git worktree remove "$path" 2>/dev/null; then
+            if [ -d "$path" ] && [ ! -e "$path/.git" ]; then
+                echo -e "\033[33mWorktree is corrupted (.git missing). Cleaning up...\033[0m"
+                rm -rf "$path" 2>/dev/null
+                if [ -d "$path" ]; then
+                    echo -e "\033[33mClose editors and terminals on this worktree, then press Enter...\033[0m"
+                    read -r
+                    rm -rf "$path"
+                    if [ -d "$path" ]; then
+                        echo -e "\033[33mCould not fully delete folder. Remove manually: $path\033[0m"
+                    fi
+                fi
+            elif ! git worktree remove "$path" 2>/dev/null; then
                 read -rp "Worktree has changes. Force remove? (y/n): " force
                 if [ "$force" = "y" ]; then
-                    git worktree remove --force "$path"
+                    git worktree remove --force "$path" 2>/dev/null
                     if [ -d "$path" ]; then
                         echo -e "\033[33mClose editors and terminals on this worktree, then press Enter...\033[0m"
                         read -r
@@ -173,12 +197,12 @@ gwt() {
                 fi
             fi
 
+            git worktree prune
             if [ -n "$branchName" ]; then
                 if ! git branch -d "$branchName" 2>/dev/null; then
                     echo -e "\033[33mNote: branch '$branchName' not deleted (unmerged or still in use)\033[0m"
                 fi
             fi
-            git worktree prune
             echo -e "\033[32mRemoved worktree and branch\033[0m"
             ;;
 
@@ -192,6 +216,15 @@ gwt() {
                 path=$(echo "${worktrees[$i]}" | awk '{print $1}')
                 branchInfo=$(echo "${worktrees[$i]}" | grep -oP '\[(.+?)\]' | tr -d '[]')
                 [ -z "$branchInfo" ] && branchInfo="detached"
+
+                if [ ! -d "$path" ]; then
+                    printf "  %d) \033[36m[%s]\033[0m \033[31m[missing]\033[0m %s\n" $((i + 1)) "$branchInfo" "$path"
+                    continue
+                fi
+                if [ ! -e "$path/.git" ]; then
+                    printf "  %d) \033[36m[%s]\033[0m \033[31m[corrupted]\033[0m %s\n" $((i + 1)) "$branchInfo" "$path"
+                    continue
+                fi
 
                 dirty=$(git -C "$path" status --porcelain)
                 ahead=$(git -C "$path" rev-list --count '@{u}..HEAD' 2>/dev/null)
@@ -293,7 +326,15 @@ gwt() {
             local worktrees
             mapfile -t worktrees < <(git worktree list)
             for i in "${!worktrees[@]}"; do
-                echo "  $((i + 1))) ${worktrees[$i]}"
+                local wtpath
+                wtpath=$(echo "${worktrees[$i]}" | awk '{print $1}')
+                local marker=""
+                if [ -d "$wtpath" ] && [ ! -e "$wtpath/.git" ]; then
+                    marker=" \033[31m[corrupted]\033[0m"
+                elif [ ! -d "$wtpath" ]; then
+                    marker=" \033[31m[missing]\033[0m"
+                fi
+                echo -e "  $((i + 1))) ${worktrees[$i]}${marker}"
             done
             ;;
 

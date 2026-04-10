@@ -46,10 +46,16 @@ function gwt {
                 # Remote branch exists, create local tracking branch
                 git worktree add -b $branch $folder "origin/$branch"
             } else {
-                # Brand new branch off main
+                # Brand new branch — detect base: remote HEAD > origin/main > current branch
                 $defaultBranch = git symbolic-ref refs/remotes/origin/HEAD 2>$null | ForEach-Object { $_ -replace 'refs/remotes/origin/', '' }
                 if (-not $defaultBranch) {
-                    $defaultBranch = if (git rev-parse --verify "origin/main" 2>$null) { "main" } else { "master" }
+                    if (git rev-parse --verify "origin/main" 2>$null) {
+                        $defaultBranch = "main"
+                    } elseif (git rev-parse --verify "origin/master" 2>$null) {
+                        $defaultBranch = "master"
+                    } else {
+                        $defaultBranch = git rev-parse --abbrev-ref HEAD
+                    }
                 }
                 git worktree add -b $branch $folder $defaultBranch
             }
@@ -67,7 +73,7 @@ function gwt {
             code .
 
             $fullPath = (Resolve-Path .).Path -replace '\\', '/' -replace 'C:', '/mnt/c'
-            wt new-tab -p "Ubuntu" -- wsl bash -ic "cd '$fullPath' && claude"
+            wt new-tab --title $branch -p "Ubuntu" -- wsl bash -ic "cd '$fullPath' && claude --name '$branch'"
 
             Pop-Location
         }
@@ -93,10 +99,11 @@ function gwt {
 
             $path = $worktrees[$index].Path
 
+            $branchName = $worktrees[$index].Branch
             Push-Location $path
             code .
             $fullPath = (Resolve-Path .).Path -replace '\\', '/' -replace 'C:', '/mnt/c'
-            wt new-tab -p "Ubuntu" -- wsl bash -ic "cd '$fullPath' && claude"
+            wt new-tab --title $branchName -p "Ubuntu" -- wsl bash -ic "cd '$fullPath' && claude --name '$branchName'"
             Pop-Location
 
             Write-Host "Opened worktree at $path" -ForegroundColor Green
@@ -145,33 +152,49 @@ function gwt {
                 return
             }
 
-            git worktree remove "$path"
-            if ($LASTEXITCODE -ne 0) {
-                $force = Read-Host "Worktree has changes. Force remove? (y/n)"
-                if ($force -eq 'y') {
-                    git worktree remove --force "$path"
+            $gitFile = Join-Path $path ".git"
+            $corrupted = (Test-Path $path) -and -not (Test-Path $gitFile)
+
+            if ($corrupted) {
+                Write-Host "Worktree is corrupted (.git missing). Cleaning up..." -ForegroundColor Yellow
+                Remove-Item -Recurse -Force $path -ErrorAction SilentlyContinue
+                if (Test-Path $path) {
+                    Write-Host "Close VS Code and any terminals on this worktree, then press Enter..." -ForegroundColor Yellow
+                    Read-Host
+                    Remove-Item -Recurse -Force $path
                     if (Test-Path $path) {
-                        Write-Host "Close VS Code and any terminals on this worktree, then press Enter..." -ForegroundColor Yellow
-                        Read-Host
-                        Remove-Item -Recurse -Force $path
-                        if (Test-Path $path) {
-                            Write-Host "Could not fully delete folder. Remove manually: $path" -ForegroundColor Yellow
-                        }
+                        Write-Host "Could not fully delete folder. Remove manually: $path" -ForegroundColor Yellow
                     }
                 }
-                else {
-                    Write-Host "Cancelled" -ForegroundColor Yellow
-                    return
+            } else {
+                git worktree remove "$path" 2>$null
+                if ($LASTEXITCODE -ne 0) {
+                    $force = Read-Host "Worktree has changes. Force remove? (y/n)"
+                    if ($force -eq 'y') {
+                        git worktree remove --force "$path" 2>$null
+                        if (Test-Path $path) {
+                            Write-Host "Close VS Code and any terminals on this worktree, then press Enter..." -ForegroundColor Yellow
+                            Read-Host
+                            Remove-Item -Recurse -Force $path
+                            if (Test-Path $path) {
+                                Write-Host "Could not fully delete folder. Remove manually: $path" -ForegroundColor Yellow
+                            }
+                        }
+                    }
+                    else {
+                        Write-Host "Cancelled" -ForegroundColor Yellow
+                        return
+                    }
                 }
             }
 
-            if ($branchName) { 
-                git branch -d $branchName 
+            git worktree prune
+            if ($branchName) {
+                git branch -d $branchName
                 if ($LASTEXITCODE -ne 0) {
                     Write-Host "Note: branch '$branchName' not deleted (unmerged or still in use)" -ForegroundColor Yellow
                 }
             }
-            git worktree prune
             Write-Host "Removed worktree and branch" -ForegroundColor Green
         }
         "status" {
@@ -180,6 +203,20 @@ function gwt {
             for ($i = 0; $i -lt $worktrees.Count; $i++) {
                 $path = $worktrees[$i].Path
                 $branchInfo = if ($worktrees[$i].Branch) { $worktrees[$i].Branch } else { "detached" }
+
+                Write-Host "  $($i + 1)) " -NoNewline
+                Write-Host "[$branchInfo]" -NoNewline -ForegroundColor Cyan
+
+                if (-not (Test-Path $path)) {
+                    Write-Host " [missing]" -NoNewline -ForegroundColor Red
+                    Write-Host " $path"
+                    continue
+                }
+                if (-not (Test-Path (Join-Path $path ".git"))) {
+                    Write-Host " [corrupted]" -NoNewline -ForegroundColor Red
+                    Write-Host " $path"
+                    continue
+                }
 
                 Push-Location $path
                 $dirty = git status --porcelain
@@ -193,8 +230,6 @@ function gwt {
                 if ($ahead -and $ahead -ne "0") { $sync += " +$ahead" }
                 if ($behind -and $behind -ne "0") { $sync += " -$behind" }
 
-                Write-Host "  $($i + 1)) " -NoNewline
-                Write-Host "[$branchInfo]" -NoNewline -ForegroundColor Cyan
                 Write-Host " $state" -NoNewline -ForegroundColor $stateColor
                 if ($sync) { Write-Host $sync -NoNewline -ForegroundColor Magenta }
                 Write-Host " $path"
@@ -271,7 +306,16 @@ function gwt {
         "list" {
             $worktrees = @(Get-Worktrees)
             for ($i = 0; $i -lt $worktrees.Count; $i++) {
-                Write-Host "  $($i + 1)) $(Format-Worktree $worktrees[$i])"
+                $wt = $worktrees[$i]
+                $marker = ""
+                if ((Test-Path $wt.Path) -and -not (Test-Path (Join-Path $wt.Path ".git"))) {
+                    $marker = " [corrupted]"
+                } elseif (-not (Test-Path $wt.Path)) {
+                    $marker = " [missing]"
+                }
+                Write-Host "  $($i + 1)) $(Format-Worktree $wt)" -NoNewline
+                if ($marker) { Write-Host $marker -ForegroundColor Red -NoNewline }
+                Write-Host ""
             }
         }
         default {
