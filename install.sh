@@ -7,7 +7,7 @@ set -euo pipefail
 #   bash install.sh                # from a local clone
 #   bash install.sh --update       # re-download latest version
 
-GWT_REPO="https://raw.githubusercontent.com/RKrogh/gwt/main"
+GWT_REPO="https://raw.githubusercontent.com/RKrogh/gwt/master"
 GWT_DIR="${GWT_HOME:-$HOME/.local/share/gwt}"
 GWT_SH="$GWT_DIR/gwt.sh"
 
